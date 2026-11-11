@@ -1,0 +1,13 @@
+flask
+telebot
+pyTelegramBotAPI
+requests
+Pillow
+qrcode
+bcrypt
+pyotp
+email-validator
+markupsafe
+jinja2
+bcrypt
+ 
