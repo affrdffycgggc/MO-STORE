@@ -75,7 +75,7 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
-WEB_URL = os.environ.get("WEB_URL", "https://a58566-9bd9.c.onjrnm.link")
+WEB_URL = os.environ.get("WEB_URL", "https://mo-store-fhrf.onrender.com")
 DB_PATH = os.environ.get("DB_PATH", "mo_store_v200_pro.db")
 IMAGES_DIR = os.environ.get("IMAGES_DIR", "mo_store_images_v200_pro")
 
