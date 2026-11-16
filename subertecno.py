@@ -75,7 +75,7 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
-WEB_URL = os.environ.get("WEB_URL", "https://mo-store-fhrf.onrender.com")
+WEB_URL = os.environ.get("WEB_URL", "https://a58566-9bd9.c.onjrnm.link")
 DB_PATH = os.environ.get("DB_PATH", "mo_store_v200_pro.db")
 IMAGES_DIR = os.environ.get("IMAGES_DIR", "mo_store_images_v200_pro")
 
@@ -1291,6 +1291,81 @@ def download_image(url):
         debug_print(f"Failed to download image {url}: {e}", "WARN")
     return None
 
+
+# ==============================================================================
+# أيقونات تطبيق الويب PWA
+# ==============================================================================
+_PWA_ICONS_CACHE = None
+_PWA_ICONS_LOCK = threading.Lock()
+
+def _build_pwa_icon(size, source_img=None, maskable=False):
+    """بناء أيقونة PWA بتدرج لوني متسق مع هوية المتجر (بنفسجي -> سماوي)"""
+    from PIL import ImageDraw
+    c1 = (124, 58, 237)
+    c2 = (6, 182, 212)
+    mid = tuple((a + b) // 2 for a, b in zip(c1, c2))
+    try:
+        resample = Image.Resampling.BILINEAR
+    except AttributeError:
+        resample = Image.BILINEAR
+    small = Image.new("RGB", (2, 2))
+    small.putpixel((0, 0), c1)
+    small.putpixel((1, 0), mid)
+    small.putpixel((0, 1), mid)
+    small.putpixel((1, 1), c2)
+    img = small.resize((size, size), resample)
+    draw = ImageDraw.Draw(img)
+    if source_img is not None:
+        try:
+            ratio = 0.58 if maskable else 0.76
+            target = max(8, int(size * ratio))
+            logo = source_img.copy()
+            logo.thumbnail((target, target))
+            pos = ((size - logo.width) // 2, (size - logo.height) // 2)
+            img.paste(logo, pos, logo)
+        except Exception:
+            pass
+    else:
+        m = size * (0.32 if maskable else 0.26)
+        w = float(size - 2 * m)
+        line_w = max(3, int(w * 0.08))
+        try:
+            draw.arc([m + w * 0.30, m + w * 0.02, m + w * 0.70, m + w * 0.52], start=180, end=360, fill=(255, 255, 255), width=line_w)
+            draw.rounded_rectangle([m + w * 0.06, m + w * 0.30, m + w * 0.94, m + w * 0.98], radius=int(w * 0.14), fill=(255, 255, 255))
+        except Exception:
+            draw.ellipse([size * 0.2, size * 0.2, size * 0.8, size * 0.8], fill=(255, 255, 255))
+    return img
+
+def get_pwa_icons(force=False):
+    """توليد/جلب أيقونات PWA (192 و512 وmaskable) مرة واحدة مع كاش"""
+    global _PWA_ICONS_CACHE
+    with _PWA_ICONS_LOCK:
+        if _PWA_ICONS_CACHE and not force:
+            return _PWA_ICONS_CACHE
+        result = {}
+        try:
+            source_img = None
+            try:
+                logo_name = db.get_setting("store_logo", "") or ""
+                if logo_name:
+                    logo_path = os.path.join(IMAGES_DIR, logo_name)
+                    if os.path.exists(logo_path):
+                        source_img = Image.open(logo_path).convert("RGBA")
+            except Exception:
+                source_img = None
+            specs = [("192", 192, False), ("512", 512, False), ("maskable", 512, True)]
+            for key, size, maskable in specs:
+                fname = "pwa_icon_%s.png" % key
+                fpath = os.path.join(IMAGES_DIR, fname)
+                if force or (not os.path.exists(fpath)) or os.path.getsize(fpath) == 0:
+                    _build_pwa_icon(size, source_img, maskable).save(fpath, "PNG")
+                result[key] = "/images/" + fname
+        except Exception as e:
+            debug_print("PWA icons generation failed: %s" % e, "WARN")
+            result = {"192": "/images/pwa_icon_192.png", "512": "/images/pwa_icon_512.png", "maskable": "/images/pwa_icon_maskable.png"}
+        _PWA_ICONS_CACHE = result
+        return result
+
 def format_price(price):
     cur = "SYP"
     try:
@@ -1319,9 +1394,11 @@ def format_price(price):
 
 def convert_usd_to_syp(usd_amount):
     try:
-        rate = float(db.get_setting("price_exchange_rate", "1") or 1)
+        rate = float(db.get_setting("price_exchange_rate", "15000") or 15000)
     except Exception:
-        rate = 1.0
+        rate = 15000.0
+    if rate <= 0:
+        rate = 15000.0
     try:
         usd = float(usd_amount or 0)
     except Exception:
@@ -3704,6 +3781,9 @@ function handleSearch(e){
         if(q){window.location.href='/search?q='+encodeURIComponent(q);}
     }
 }
+function gotoProduct(prodId){
+    window.location.href = '/product/' + prodId;
+}
 function liveSearch(){
     var q=document.getElementById('globalSearch').value.trim();
     var resBox=document.getElementById('liveSearchResults');
@@ -3717,7 +3797,7 @@ function liveSearch(){
         .then(function(data){
             if(data.products && data.products.length>0){
                 resBox.innerHTML = data.products.map(function(p){
-                    return '<div style="padding:10px;cursor:pointer;border-bottom:1px solid var(--brd)" onclick="window.location.href=\'/product/'+p.id+'\'"><span>'+p.name+'</span> - <span style="color:var(--accent-l);font-weight:700">'+p.price+'</span></div>';
+                    return '<div style="padding:10px;cursor:pointer;border-bottom:1px solid var(--brd)" onclick="gotoProduct('+p.id+')"><span>'+p.name+'</span> - <span style="color:var(--accent-l);font-weight:700">'+p.price+'</span></div>';
                 }).join('');
                 resBox.style.display='block';
             } else {
@@ -4251,7 +4331,430 @@ body{font-family:'Tajawal','Cairo',sans-serif;background:var(--bg);color:#fff;di
 
 ERROR_404_TMPL = """{% extends "base" %}{% block content %}<div class="error-page" style="text-align:center;padding:50px 20px"><div style="margin-bottom:16px;display:flex;justify-content:center">{{ icon('search', '4em') }}</div><h1 style="font-size:1.5rem;font-weight:900;color:var(--t1);margin-bottom:10px">الصفحة غير موجودة</h1><p style="color:var(--t3);font-size:.9rem;margin-bottom:20px">عذراً، الصفحة التي تبحث عنها غير متوفرة أو تم نقلها.</p><a href="/" class="btn bp" style="text-decoration:none">{{ icon('home', '1em') }} العودة للرئيسية</a></div>{% endblock %}"""
 
-BASE_TMPL = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta name="theme-color" content="#050614">{% if site_icon %}<link rel="icon" type="image/x-icon" href="/images/{{ site_icon }}">{% elif store_logo %}<link rel="icon" type="image/x-icon" href="/images/{{ store_logo }}">{% endif %}<title>{{ title }} - {{ store_name }}</title><style>{{ css|safe }}</style>{% if site_background %}<style>body.has-bg{background-image:url('/images/{{ site_background }}') !important;}</style>{% endif %}</head><body class="{% if site_background %}has-bg{% endif %}">""" + LOADER_HTML + """
+# ==============================================================================
+# نظام تطبيق الويب PWA (Service Worker + زر التثبيت + صفحات الدخول وعدم الاتصال)
+# ==============================================================================
+
+SW_JS_SOURCE = """// MO STORE Service Worker - تطبيق ويب تدريجي
+var CACHE_NAME = 'mo-store-cache-v1';
+var OFFLINE_URL = '/offline';
+var PRECACHE_URLS = [OFFLINE_URL, '/manifest.json'];
+
+self.addEventListener('install', function(event) {
+    event.waitUntil(
+        caches.open(CACHE_NAME).then(function(cache) {
+            return cache.addAll(PRECACHE_URLS).catch(function(err) {
+                console.warn('[SW] precache warning:', err);
+            });
+        }).then(function() {
+            return self.skipWaiting();
+        })
+    );
+});
+
+self.addEventListener('activate', function(event) {
+    event.waitUntil(
+        caches.keys().then(function(names) {
+            return Promise.all(
+                names.filter(function(n) { return n !== CACHE_NAME; })
+                     .map(function(n) { return caches.delete(n); })
+            );
+        }).then(function() {
+            return self.clients.claim();
+        })
+    );
+});
+
+self.addEventListener('fetch', function(event) {
+    var req = event.request;
+    if (req.method !== 'GET') { return; }
+    var url;
+    try { url = new URL(req.url); } catch (e) { return; }
+    if (url.origin !== location.origin) { return; }
+    if (url.pathname.indexOf('/api/') === 0) { return; }
+
+    function networkFirst() {
+        event.respondWith(
+            fetch(req).then(function(response) {
+                if (response && response.ok) {
+                    var clone = response.clone();
+                    caches.open(CACHE_NAME).then(function(cache) { cache.put(req, clone); });
+                }
+                return response;
+            }).catch(function() {
+                return caches.match(req).then(function(cached) {
+                    if (cached) { return cached; }
+                    return caches.match(OFFLINE_URL).then(function(offline) {
+                        if (offline) { return offline; }
+                        return new Response('offline', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+                    });
+                });
+            })
+        );
+    }
+
+    function cacheFirst() {
+        event.respondWith(
+            caches.match(req).then(function(cached) {
+                if (cached) { return cached; }
+                return fetch(req).then(function(response) {
+                    if (response && response.ok) {
+                        var clone = response.clone();
+                        caches.open(CACHE_NAME).then(function(cache) { cache.put(req, clone); });
+                    }
+                    return response;
+                }).catch(function() {
+                    return Response.error();
+                });
+            })
+        );
+    }
+
+    if (req.mode === 'navigate' || req.destination === 'document') {
+        networkFirst();
+        return;
+    }
+    if (url.pathname.indexOf('/images/') === 0 || url.pathname === '/manifest.json' || url.pathname === '/favicon.ico') {
+        cacheFirst();
+        return;
+    }
+    networkFirst();
+});
+"""
+
+PWA_INSTALL_HTML = """
+<style>
+.pwa-install-fab{position:fixed;bottom:96px;left:14px;z-index:6500;display:none;align-items:center;gap:9px;padding:13px 20px;border:none;border-radius:50px;background:linear-gradient(135deg,#7c3aed,#06b6d4);color:#fff;font-weight:800;font-size:.88rem;font-family:inherit;cursor:pointer;box-shadow:0 12px 35px rgba(124,58,237,0.55),0 0 20px rgba(6,182,212,0.3);animation:popupSlideIn .5s cubic-bezier(0.4,0,0.2,1);transition:transform .2s ease}
+.pwa-install-fab.visible{display:flex}
+.pwa-install-fab:active{transform:scale(0.94)}
+.pwa-install-fab .svg-icon{width:1.15em;height:1.15em;flex-shrink:0}
+.pwa-ios-tip{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:6600;display:none;width:92%;max-width:430px;background:var(--bg2);border:1px solid var(--gbrd);border-radius:var(--r);padding:16px 16px 14px;box-shadow:0 20px 60px rgba(0,0,0,0.55);animation:popupSlideIn .5s cubic-bezier(0.4,0,0.2,1)}
+.pwa-ios-tip.visible{display:block}
+.pwa-ios-tip-title{font-weight:800;font-size:.9rem;margin-bottom:8px;display:flex;align-items:center;gap:8px;color:var(--t1)}
+.pwa-ios-tip-text{font-size:.78rem;color:var(--t2);line-height:1.9}
+.pwa-ios-tip-close{position:absolute;top:8px;left:8px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:var(--err);width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+</style>
+<button type="button" class="pwa-install-fab" id="pwaInstallFab">{{ icon('download', '1.15em') }} <span>تثبيت التطبيق</span></button>
+<div class="pwa-ios-tip" id="pwaIosTip">
+    <button type="button" class="pwa-ios-tip-close" id="pwaIosTipClose">{{ icon('close', '0.9em') }}</button>
+    <div class="pwa-ios-tip-title">{{ icon('download', '1.1em') }} ثبّت تطبيق {{ store_name }}</div>
+    <div class="pwa-ios-tip-text">على آيفون: اضغط زر المشاركة <b>(Share)</b> في متصفح سفاري ثم اختر <b>«إضافة إلى الشاشة الرئيسية»</b> لتثبيت التطبيق والدخول للمتجر مباشرة بدون تلجرام.</div>
+</div>
+<script>
+(function(){
+    var deferredPrompt = null;
+    var installFab = document.getElementById('pwaInstallFab');
+    var iosTip = document.getElementById('pwaIosTip');
+
+    function isStandalone(){
+        return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+    }
+    function isIOS(){
+        return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+    }
+    function isDismissed(){
+        try { return localStorage.getItem('mo_pwa_install_dismissed') === '1'; } catch(e) { return false; }
+    }
+    function setDismissed(){
+        try { localStorage.setItem('mo_pwa_install_dismissed', '1'); } catch(e) {}
+    }
+    function showFab(){
+        if(installFab && !isStandalone() && !isDismissed()){ installFab.classList.add('visible'); }
+    }
+    function hideInstallUI(){
+        if(installFab){ installFab.classList.remove('visible'); }
+        if(iosTip){ iosTip.classList.remove('visible'); }
+    }
+
+    window.addEventListener('beforeinstallprompt', function(e){
+        e.preventDefault();
+        deferredPrompt = e;
+        showFab();
+    });
+
+    if(installFab){
+        installFab.addEventListener('click', function(){
+            if(deferredPrompt){
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then(function(choice){
+                    if(choice && choice.outcome === 'accepted'){
+                        hideInstallUI();
+                        setDismissed();
+                        if(typeof showPopupNotification === 'function'){
+                            showPopupNotification('تم تثبيت التطبيق', 'يمكنك الآن فتح المتجر مباشرة من أيقونة التطبيق على شاشتك الرئيسية', '{{ icon("check_circle","2em")|safe }}');
+                        }
+                    }
+                    deferredPrompt = null;
+                }).catch(function(){ deferredPrompt = null; });
+            } else if(isIOS()){
+                if(iosTip){ iosTip.classList.add('visible'); }
+            } else {
+                if(typeof showModal === 'function'){
+                    showModal('{{ icon("download","2.4em")|safe }}', 'تثبيت التطبيق', 'لتثبيت التطبيق على جهازك: افتح قائمة المتصفح ثم اختر «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية».');
+                }
+            }
+        });
+    }
+
+    if(iosTip){
+        var closeBtn = document.getElementById('pwaIosTipClose');
+        if(closeBtn){
+            closeBtn.addEventListener('click', function(e){
+                e.preventDefault();
+                e.stopPropagation();
+                iosTip.classList.remove('visible');
+                setDismissed();
+            });
+        }
+    }
+
+    window.addEventListener('appinstalled', function(){
+        hideInstallUI();
+        setDismissed();
+        if(typeof showPopupNotification === 'function'){
+            showPopupNotification('تم تثبيت التطبيق بنجاح', 'أهلاً بك! يمكنك فتح المتجر الآن من أيقونة التطبيق على شاشتك الرئيسية', '{{ icon("rocket","2em")|safe }}');
+        }
+    });
+
+    if(isIOS() && !isStandalone() && !isDismissed() && iosTip){
+        setTimeout(function(){ iosTip.classList.add('visible'); }, 2500);
+    }
+
+    if('serviceWorker' in navigator){
+        window.addEventListener('load', function(){
+            navigator.serviceWorker.register('/sw.js').catch(function(err){
+                console.warn('SW registration failed:', err);
+            });
+        });
+    }
+})();
+</script>
+"""
+
+LOGIN_PAGE_TMPL = """{% extends "base" %}{% block content %}
+<div class="auth-wrap">
+    <div class="auth-card">
+        <div class="auth-logo">{{ icon('rocket', '2.6em') }}</div>
+        <h1 class="auth-title">{{ store_name }}</h1>
+        <p class="auth-subtitle">سجّل الدخول لمتابعة التسوق والاستفادة من جميع المزايا</p>
+
+        <div class="auth-tabs">
+            <button type="button" class="auth-tab active" id="tabLoginBtn" onclick="switchAuthTab('login')">{{ icon('user', '1em') }} تسجيل الدخول</button>
+            <button type="button" class="auth-tab" id="tabRegBtn" onclick="switchAuthTab('register')">{{ icon('plus', '1em') }} حساب جديد</button>
+        </div>
+
+        <form id="authLoginForm" onsubmit="doAuthLogin(event)" novalidate>
+            <div class="auth-field">
+                <label class="auth-label">{{ icon('user', '1em') }} اسم المستخدم</label>
+                <input class="auth-input" type="text" id="loginUsername" autocomplete="username" placeholder="أدخل اسم المستخدم">
+            </div>
+            <div class="auth-field">
+                <label class="auth-label">{{ icon('lock', '1em') }} كلمة المرور</label>
+                <div class="auth-pass-wrap">
+                    <input class="auth-input" type="password" id="loginPassword" autocomplete="current-password" placeholder="أدخل كلمة المرور">
+                    <button type="button" class="auth-pass-toggle" onclick="toggleAuthPass('loginPassword', this)">إظهار</button>
+                </div>
+            </div>
+            <button type="submit" class="auth-submit" id="loginSubmitBtn">{{ icon('rocket', '1em') }} تسجيل الدخول</button>
+        </form>
+
+        <form id="authRegisterForm" style="display:none" onsubmit="doAuthRegister(event)" novalidate>
+            <div class="auth-field">
+                <label class="auth-label">{{ icon('user', '1em') }} اسم المستخدم</label>
+                <input class="auth-input" type="text" id="regUsername" autocomplete="username" placeholder="اختر اسم مستخدم">
+            </div>
+            <div class="auth-field">
+                <label class="auth-label">{{ icon('lock', '1em') }} كلمة المرور</label>
+                <div class="auth-pass-wrap">
+                    <input class="auth-input" type="password" id="regPassword" autocomplete="new-password" placeholder="6 أحرف على الأقل">
+                    <button type="button" class="auth-pass-toggle" onclick="toggleAuthPass('regPassword', this)">إظهار</button>
+                </div>
+            </div>
+            <div class="auth-field">
+                <label class="auth-label">{{ icon('lock', '1em') }} تأكيد كلمة المرور</label>
+                <input class="auth-input" type="password" id="regPassword2" autocomplete="new-password" placeholder="أعد كتابة كلمة المرور">
+            </div>
+            <div class="auth-field">
+                <label class="auth-label">{{ icon('phone', '1em') }} رقم الهاتف (اختياري)</label>
+                <input class="auth-input" type="tel" id="regPhone" placeholder="09xxxxxxxx">
+            </div>
+            <button type="submit" class="auth-submit" id="regSubmitBtn">{{ icon('check', '1em') }} إنشاء الحساب</button>
+        </form>
+
+        <div class="auth-divider"><span>أو</span></div>
+        <a href="{{ telegram_login_url }}" class="auth-tg-btn">{{ icon('telegram', '1.2em') }} الدخول عبر تيليجرام</a>
+        <a href="/" class="auth-back-link">{{ icon('arrow_back', '1em') }} تصفح المتجر كزائر</a>
+    </div>
+</div>
+
+<style>
+.auth-wrap{min-height:calc(100vh - 220px);display:flex;align-items:center;justify-content:center;padding:24px 14px}
+.auth-card{width:100%;max-width:430px;background:var(--bg2);border:1px solid var(--gbrd);border-radius:var(--r);padding:30px 24px;box-shadow:0 25px 70px rgba(0,0,0,0.45)}
+.auth-logo{width:74px;height:74px;margin:0 auto 14px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#06b6d4);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 0 35px rgba(124,58,237,0.5)}
+.auth-title{font-size:1.35rem;font-weight:900;text-align:center;margin-bottom:6px;background:var(--grad1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.auth-subtitle{font-size:.8rem;color:var(--t3);text-align:center;margin-bottom:20px;line-height:1.7}
+.auth-tabs{display:flex;gap:8px;background:var(--bg);border:1px solid var(--brd);border-radius:var(--rs);padding:5px;margin-bottom:18px}
+.auth-tab{flex:1;background:transparent;border:none;color:var(--t3);font-weight:800;font-size:.82rem;padding:10px 8px;border-radius:var(--rs);cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px;transition:var(--tr)}
+.auth-tab.active{background:linear-gradient(135deg,#7c3aed,#06b6d4);color:#fff;box-shadow:0 6px 18px rgba(124,58,237,0.4)}
+.auth-field{margin-bottom:14px}
+.auth-label{display:flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;color:var(--t2);margin-bottom:7px}
+.auth-input{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--brd);border-radius:var(--rs);padding:13px 14px;color:var(--t1);font-size:.9rem;font-family:inherit;transition:var(--tr)}
+.auth-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px rgba(124,58,237,0.15)}
+.auth-pass-wrap{position:relative}
+.auth-pass-toggle{position:absolute;top:50%;left:10px;transform:translateY(-50%);background:rgba(124,58,237,0.12);border:none;color:var(--accent-l);font-size:.7rem;font-weight:800;padding:6px 10px;border-radius:8px;cursor:pointer;font-family:inherit}
+.auth-submit{width:100%;background:linear-gradient(135deg,#7c3aed,#06b6d4);color:#fff;border:none;border-radius:var(--rs);padding:14px;font-size:.95rem;font-weight:900;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 10px 30px rgba(124,58,237,0.4);transition:var(--tr);margin-top:4px}
+.auth-submit:active{transform:scale(0.97)}
+.auth-submit:disabled{opacity:0.7;cursor:not-allowed}
+.auth-divider{display:flex;align-items:center;gap:12px;margin:18px 0 14px}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--brd)}
+.auth-divider span{font-size:.72rem;color:var(--t3);font-weight:700}
+.auth-tg-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;box-sizing:border-box;background:rgba(0,136,204,0.12);border:1px solid rgba(0,136,204,0.4);color:#38bdf8;border-radius:var(--rs);padding:13px;font-size:.88rem;font-weight:800;text-decoration:none;transition:var(--tr)}
+.auth-tg-btn:active{transform:scale(0.97)}
+.auth-back-link{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;font-size:.76rem;color:var(--t3);text-decoration:none;font-weight:700}
+</style>
+
+<script>
+function switchAuthTab(which){
+    var loginForm = document.getElementById('authLoginForm');
+    var regForm = document.getElementById('authRegisterForm');
+    var tabLogin = document.getElementById('tabLoginBtn');
+    var tabReg = document.getElementById('tabRegBtn');
+    if(which === 'register'){
+        if(loginForm){ loginForm.style.display = 'none'; }
+        if(regForm){ regForm.style.display = 'block'; }
+        if(tabLogin){ tabLogin.classList.remove('active'); }
+        if(tabReg){ tabReg.classList.add('active'); }
+    } else {
+        if(loginForm){ loginForm.style.display = 'block'; }
+        if(regForm){ regForm.style.display = 'none'; }
+        if(tabLogin){ tabLogin.classList.add('active'); }
+        if(tabReg){ tabReg.classList.remove('active'); }
+    }
+}
+
+function toggleAuthPass(inputId, btn){
+    var input = document.getElementById(inputId);
+    if(!input){ return; }
+    if(input.type === 'password'){
+        input.type = 'text';
+        if(btn){ btn.textContent = 'إخفاء'; }
+    } else {
+        input.type = 'password';
+        if(btn){ btn.textContent = 'إظهار'; }
+    }
+}
+
+function authBtnLoading(btn, loading, normalHtml){
+    if(!btn){ return; }
+    if(loading){
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.innerHTML = 'جاري المعالجة...';
+    } else {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.innerHTML = normalHtml;
+    }
+}
+
+async function doAuthLogin(e){
+    e.preventDefault();
+    var username = (document.getElementById('loginUsername').value || '').trim();
+    var password = document.getElementById('loginPassword').value || '';
+    if(!username || !password){
+        if(typeof showModal === 'function'){ showModal('{{ icon("warning","2em")|safe }}', 'تنبيه', 'يرجى إدخال اسم المستخدم وكلمة المرور.'); }
+        return;
+    }
+    var btn = document.getElementById('loginSubmitBtn');
+    authBtnLoading(btn, true);
+    try {
+        var response = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ username: username, password: password })
+        });
+        var data = await response.json();
+        if(data.success && data.token){
+            if(typeof showPopupNotification === 'function'){
+                showPopupNotification('تم تسجيل الدخول', 'أهلاً بك ' + data.username + '! جاري تحويلك للمتجر...', '{{ icon("check_circle","2em")|safe }}');
+            }
+            setTimeout(function(){
+                window.location.href = '/api/auth/handoff?token=' + encodeURIComponent(data.token);
+            }, 700);
+        } else {
+            if(typeof showModal === 'function'){ showModal('{{ icon("x_circle","2em")|safe }}', 'فشل تسجيل الدخول', data.message || 'بيانات الدخول غير صحيحة'); }
+            authBtnLoading(btn, false, '{{ icon("rocket","1em")|safe }} تسجيل الدخول');
+        }
+    } catch(err) {
+        if(typeof showModal === 'function'){ showModal('{{ icon("warning","2em")|safe }}', 'خطأ', 'حدث خطأ في الاتصال بالخادم. يرجى المحاولة مرة أخرى.'); }
+        authBtnLoading(btn, false, '{{ icon("rocket","1em")|safe }} تسجيل الدخول');
+    }
+}
+
+async function doAuthRegister(e){
+    e.preventDefault();
+    var username = (document.getElementById('regUsername').value || '').trim();
+    var password = document.getElementById('regPassword').value || '';
+    var password2 = document.getElementById('regPassword2').value || '';
+    var phone = (document.getElementById('regPhone').value || '').trim();
+    if(!username || !password){
+        if(typeof showModal === 'function'){ showModal('{{ icon("warning","2em")|safe }}', 'تنبيه', 'يرجى إدخال اسم المستخدم وكلمة المرور.'); }
+        return;
+    }
+    if(password.length < 6){
+        if(typeof showModal === 'function'){ showModal('{{ icon("warning","2em")|safe }}', 'تنبيه', 'كلمة المرور يجب أن تكون 6 أحرف على الأقل.'); }
+        return;
+    }
+    if(password !== password2){
+        if(typeof showModal === 'function'){ showModal('{{ icon("warning","2em")|safe }}', 'تنبيه', 'كلمتا المرور غير متطابقتين.'); }
+        return;
+    }
+    var btn = document.getElementById('regSubmitBtn');
+    authBtnLoading(btn, true);
+    try {
+        var payload = { username: username, password: password };
+        if(phone){ payload.phone = phone; }
+        var response = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+        });
+        var data = await response.json();
+        if(data.success && data.token){
+            if(typeof showPopupNotification === 'function'){
+                showPopupNotification('تم إنشاء الحساب', 'أهلاً بك ' + data.username + '! جاري تحويلك للمتجر...', '{{ icon("check_circle","2em")|safe }}');
+            }
+            setTimeout(function(){
+                window.location.href = '/api/auth/handoff?token=' + encodeURIComponent(data.token);
+            }, 700);
+        } else {
+            if(typeof showModal === 'function'){ showModal('{{ icon("x_circle","2em")|safe }}', 'فشل إنشاء الحساب', data.message || 'تعذر إنشاء الحساب'); }
+            authBtnLoading(btn, false, '{{ icon("check","1em")|safe }} إنشاء الحساب');
+        }
+    } catch(err) {
+        if(typeof showModal === 'function'){ showModal('{{ icon("warning","2em")|safe }}', 'خطأ', 'حدث خطأ في الاتصال بالخادم. يرجى المحاولة مرة أخرى.'); }
+        authBtnLoading(btn, false, '{{ icon("check","1em")|safe }} إنشاء الحساب');
+    }
+}
+</script>
+{% endblock %}"""
+
+OFFLINE_PAGE_TMPL = """{% extends "base" %}{% block content %}
+<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;text-align:center;padding:20px">
+    <div style="margin-bottom:18px;opacity:.65">{{ icon('warning', '3em') }}</div>
+    <h2 style="font-size:1.5rem;font-weight:900;background:var(--grad1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:12px">لا يوجد اتصال بالإنترنت</h2>
+    <p style="font-size:.92rem;color:var(--t2);line-height:1.9;margin-bottom:24px">يبدو أنك غير متصل بالإنترنت حالياً.<br>تحقق من اتصالك ثم أعد المحاولة — سيتم تحديث الصفحة تلقائياً عند عودة الاتصال.</p>
+    <button class="btn bp" onclick="location.reload()">{{ icon('refresh', '1em') }} إعادة المحاولة</button>
+</div>
+<script>
+setTimeout(function(){ location.reload(); }, 15000);
+window.addEventListener('online', function(){ location.reload(); });
+</script>
+{% endblock %}"""
+
+BASE_TMPL = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta name="theme-color" content="#050614"><link rel="manifest" href="/manifest.json"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="{{ store_name }}"><link rel="apple-touch-icon" href="{{ pwa_icon_192 }}">{% if site_icon %}<link rel="icon" type="image/x-icon" href="/images/{{ site_icon }}">{% elif store_logo %}<link rel="icon" type="image/x-icon" href="/images/{{ store_logo }}">{% endif %}<title>{{ title }} - {{ store_name }}</title><style>{{ css|safe }}</style>{% if site_background %}<style>body.has-bg{background-image:url('/images/{{ site_background }}') !important;}</style>{% endif %}</head><body class="{% if site_background %}has-bg{% endif %}">""" + LOADER_HTML + """
 <script type="application/json" id="site-config-data">
 {
     "entry_title": {{ site_entry_notif_title|tojson|safe }},
@@ -4465,7 +4968,7 @@ BASE_TMPL = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF
 
 <a href="/support/chat" class="wa-support-fab" title="محادثة مباشرة" style="text-decoration:none">{{ icon('whatsapp', '1.5em') }}</a>
 <button class="back-to-top" id="backToTop">{{ icon('arrow_up', '1.2em') }}</button>
-""" + LAZY_LOAD_SCRIPT + GLOBAL_JS_SCRIPT + WELCOME_POPUP_HTML + AD_SLIDESHOW_SCRIPT + """
+""" + LAZY_LOAD_SCRIPT + GLOBAL_JS_SCRIPT + WELCOME_POPUP_HTML + AD_SLIDESHOW_SCRIPT + PWA_INSTALL_HTML + """
 </body></html>"""
 
 MENU_PAGE_TMPL = """{% extends "base" %}{% block content %}
@@ -5176,7 +5679,7 @@ PRODUCT_TMPL = """{% extends "base" %}{% block content %}
             <div class="guest-login-prompt">
                 <div class="guest-login-prompt-icon">{{ icon('lock', '3em') }}</div>
                 <div class="guest-login-prompt-title">يجب تسجيل الدخول للشراء</div>
-                <div class="guest-login-prompt-text">يمكنك تصفح المنتج ومشاهدة التفاصيل، ولكن لإتمام عملية الشراء يجب الدخول عبر تيليجرام.</div>
+                <div class="guest-login-prompt-text">يمكنك تصفح المنتج ومشاهدة التفاصيل، ولكن لإتمام عملية الشراء يجب تسجيل الدخول إلى حسابك (بالاسم وكلمة المرور أو عبر تيليجرام).</div>
                 <a href="/login" class="guest-login-prompt-btn">{{ icon('rocket', '1em') }} الدخول للشراء</a>
             </div>
             {% endif %}
@@ -5193,6 +5696,8 @@ PRODUCT_TMPL = """{% extends "base" %}{% block content %}
             "use strict";
             
             var CURRENCY = {{ currency_symbol|tojson|safe }};
+            var SESSION_CURRENCY = {{ session_currency|tojson|safe }};
+            var EXCHANGE_RATE = parseFloat('{{ exchange_rate }}') || 15000;
             var PRODUCT_ID = {{ product.id }};
             {% if active_offer %}
             var unitPrice = {{ active_offer.offer_price or 0 }};
@@ -5208,10 +5713,15 @@ PRODUCT_TMPL = """{% extends "base" %}{% block content %}
             function formatPrice(p){
                 var num = parseFloat(p || 0);
                 if(isNaN(num)) num = 0;
-                if(num >= 1000){
-                    return num.toLocaleString('ar-EG',{minimumFractionDigits:0, maximumFractionDigits:0}) + ' ' + CURRENCY;
+                var suffix = ' ' + CURRENCY;
+                if(SESSION_CURRENCY === 'USD'){
+                    if(EXCHANGE_RATE > 0){ num = num / EXCHANGE_RATE; }
+                    suffix = ' $';
                 }
-                return num.toLocaleString('ar-EG',{minimumFractionDigits:0, maximumFractionDigits:2}) + ' ' + CURRENCY;
+                if(num >= 1000){
+                    return num.toLocaleString('ar-EG',{minimumFractionDigits:0, maximumFractionDigits:0}) + suffix;
+                }
+                return num.toLocaleString('ar-EG',{minimumFractionDigits:0, maximumFractionDigits:2}) + suffix;
             }
             
             function getUnitPrice(){
@@ -5410,7 +5920,7 @@ PRODUCT_TMPL = """{% extends "base" %}{% block content %}
                             msg += 'font-family:monospace;direction:ltr;text-align:left;" readonly>';
                             msg += String(data.delivered).replace(/</g, '&lt;').replace(/>/g, '&gt;');
                             msg += '</textarea>';
-                            msg += '<button class="btn bsm bp" style="margin-top:8px" onclick="copyToClipboard(document.getElementById(\'deliveredData\').value)">📋 نسخ</button>';
+                            msg += '<button class="btn bsm bp" style="margin-top:8px" onclick="copyDeliveredData()">📋 نسخ</button>';
                         }
                         if(typeof showModal === 'function'){ showModal('{{ icon("check_circle","2.4em")|safe }}', 'تم استلام طلبك بنجاح!', msg); } else { alert(msg.replace(/<[^>]+>/g, '')); }
                         if(typeof showPopupNotification === 'function'){ showPopupNotification('تم الطلب بنجاح!', String(data.message || 'تم استلام طلبك').substring(0, 100), '{{ icon("check_circle","2em")|safe }}'); }
@@ -5437,7 +5947,15 @@ PRODUCT_TMPL = """{% extends "base" %}{% block content %}
                 return false;
             }
             
+            function copyDeliveredData(){
+                var el = document.getElementById('deliveredData');
+                if(el && typeof copyToClipboard === 'function'){
+                    copyToClipboard(el.value);
+                }
+            }
+
             window.submitBuyForm = submitBuyForm;
+            window.copyDeliveredData = copyDeliveredData;
             window.changeQty = changeQty;
             window.onQtyInput = onQtyInput;
             window.validateQty = validateQty;
@@ -5449,18 +5967,19 @@ PRODUCT_TMPL = """{% extends "base" %}{% block content %}
             updateTotal();
             updateOptInfo();
             
-            var purchaseBtn = document.getElementById('mainPurchaseBtn');
-            if(purchaseBtn){
-                purchaseBtn.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); submitBuyForm(PRODUCT_ID); });
-            }
-            
-            document.addEventListener('DOMContentLoaded', function(){
-                updateTotal(); updateOptInfo();
+            function bindPurchaseButton(){
                 var btn2 = document.getElementById('mainPurchaseBtn');
                 if(btn2 && !btn2.hasAttribute('data-listener')){
                     btn2.setAttribute('data-listener', '1');
                     btn2.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); submitBuyForm(PRODUCT_ID); });
                 }
+            }
+
+            bindPurchaseButton();
+
+            document.addEventListener('DOMContentLoaded', function(){
+                updateTotal(); updateOptInfo();
+                bindPurchaseButton();
             });
         })();
         </script>
@@ -5929,6 +6448,8 @@ SHIPPING_CHECKOUT_TMPL = """{% extends "base" %}{% block content %}
 </div>
 <script>
 var productTotal={{ product_total }};
+var sessionCurrency={{ session_currency|tojson|safe }};
+var exchangeRate=parseFloat('{{ exchange_rate }}')||15000;
 function selectShipping(box){
     document.querySelectorAll('#shippingMethodsGrid .method-box').forEach(function(b){b.classList.remove('selected');});
     box.classList.add('selected');
@@ -5940,8 +6461,14 @@ function selectShipping(box){
 }
 function formatPriceLocal(p){
     var num=parseFloat(p||0);
-    if(num>=1000){return num.toLocaleString('ar-EG',{minimumFractionDigits:0,maximumFractionDigits:0})+' '+'{{ currency_symbol }}';}
-    return num.toLocaleString('ar-EG',{minimumFractionDigits:0,maximumFractionDigits:2})+' '+'{{ currency_symbol }}';
+    if(isNaN(num))num=0;
+    var suffix=' '+'{{ currency_symbol }}';
+    if(sessionCurrency==='USD'){
+        if(exchangeRate>0){num=num/exchangeRate;}
+        suffix=' $';
+    }
+    if(num>=1000){return num.toLocaleString('ar-EG',{minimumFractionDigits:0,maximumFractionDigits:0})+suffix;}
+    return num.toLocaleString('ar-EG',{minimumFractionDigits:0,maximumFractionDigits:2})+suffix;
 }
 async function submitCheckout(e) {
     e.preventDefault();
@@ -6945,6 +7472,7 @@ if not WEB_SECRET_KEY:
 app.secret_key = WEB_SECRET_KEY
 app.permanent_session_lifetime = timedelta(days=365 * 10) # 10 years long session
 
+
 templates_map = {
     "base": BASE_TMPL, "home": HOME_TMPL, "category": CATEGORY_TMPL, "product": PRODUCT_TMPL,
     "shipping_checkout": SHIPPING_CHECKOUT_TMPL,
@@ -6960,7 +7488,9 @@ templates_map = {
     "menu_page": MENU_PAGE_TMPL,                  
     "support_chat_page": SUPPORT_CHAT_PAGE_TMPL,
     "offers": OFFERS_TMPL, "wheel": WHEEL_TMPL,
-    "topup_processing": TOPUP_PROCESSING_TMPL
+    "topup_processing": TOPUP_PROCESSING_TMPL,
+    "login_page": LOGIN_PAGE_TMPL,
+    "offline_page": OFFLINE_PAGE_TMPL
 }
 
 def tojson_filter(value):
@@ -7017,6 +7547,7 @@ def render(tmpl_name, **kwargs):
     kwargs.setdefault("show_bottom_offers", db.get_setting("enable_offers_section", "1") == "1")
     kwargs.setdefault("active_offers", get_all_active_offers())
     kwargs.setdefault("exchange_rate", db.get_setting("price_exchange_rate", "15000"))
+    kwargs.setdefault("pwa_icon_192", get_pwa_icons().get("192", ""))
 
     top_ads_images, top_ads_text = get_top_ads()
     kwargs.setdefault("top_ads_images", top_ads_images)
@@ -7148,6 +7679,9 @@ def before_request():
     path = request.path
     if (path.startswith('/images/') or 
         path == '/favicon.ico' or 
+        path == '/manifest.json' or
+        path == '/sw.js' or
+        path == '/offline' or
         path.startswith('/api/notifications/check') or
         path.startswith('/api/chat/messages') or
         path.startswith('/api/notifications/latest') or
@@ -7211,8 +7745,11 @@ def not_found(e):
 
 @app.route("/login")
 def login_page():
+    if "user_id" in session:
+        return redirect("/")
     bot_username = get_current_bot_username()
-    return redirect(f"https://t.me/{bot_username}?start=1")
+    return render("login_page", title="تسجيل الدخول", active_page="login",
+                  telegram_login_url=f"https://t.me/{bot_username}?start=1")
 
 @app.route("/api/currency/switch", methods=["POST"])
 def api_switch_currency():
@@ -7580,10 +8117,8 @@ def api_buy_product():
         check_and_award_spins(session["user_id"], total)
         
         api_result = None
-        is_manual_product = prod.get("api_product_id", "") and (
-            str(prod["api_product_id"]).startswith("manual_") or
-            str(prod["api_product_id"]).startswith("gen_")
-        )
+        _api_pid_raw = str(prod.get("api_product_id") or "").strip()
+        is_manual_product = (not _api_pid_raw) or _api_pid_raw.startswith("manual_") or _api_pid_raw.startswith("gen_")
         
         api_product_id_to_use = variant_api_id if variant_api_id else prod.get("api_product_id", "")
         
@@ -7786,7 +8321,7 @@ def checkout_confirm():
     total_price = product_total + shipping_price
     order_id = f"ORD-{uuid.uuid4().hex[:12].upper()}"
     
-    db.execute("""INSERT INTO purchase_orders (order_id, user_id, product_id, quantity, unit_price, total_price, status, player_id, shipping_method_id, shipping_price, transaction_number, payment_amount, customer_info) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""", (order_id, session["user_id"], prod_id, qty, prod["sell_price"], total_price, player_id, shipping_method_id, shipping_price, transaction_number, payment_amount, json.dumps(custom_fields, ensure_ascii=False)))
+    db.execute("""INSERT INTO purchase_orders (order_id, user_id, product_id, quantity, unit_price, total_price, status, player_id, shipping_method_id, shipping_price, transaction_number, payment_amount, customer_info) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""", (order_id, session["user_id"], prod_id, qty, prod["sell_price"], total_price, player_id, shipping_method_id, shipping_price, transaction_number, payment_amount, json.dumps(custom_fields, ensure_ascii=False)))
     
     clear_cart(session["user_id"])
     
@@ -8058,6 +8593,45 @@ def serve_image(filename):
 @app.route('/favicon.ico')
 def favicon():
     return '', 204
+
+@app.route('/manifest.json')
+def manifest_json():
+    icons = get_pwa_icons()
+    store_name = db.get_setting("store_name", "MO STORE") or "MO STORE"
+    short_name = store_name[:12] if store_name else "MO STORE"
+    manifest = {
+        "id": "/",
+        "name": store_name,
+        "short_name": short_name,
+        "description": db.get_setting("store_description", "متجر البطاقات الرقمية والشحن") or "متجر البطاقات الرقمية والشحن",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "dir": "rtl",
+        "lang": "ar",
+        "background_color": "#050614",
+        "theme_color": "#050614",
+        "icons": [
+            {"src": icons.get("192", "/images/pwa_icon_192.png"), "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": icons.get("512", "/images/pwa_icon_512.png"), "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": icons.get("maskable", "/images/pwa_icon_maskable.png"), "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+        ]
+    }
+    resp = app.response_class(json.dumps(manifest, ensure_ascii=False, indent=2), mimetype='application/manifest+json')
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+@app.route('/sw.js')
+def service_worker():
+    resp = Response(SW_JS_SOURCE, mimetype='application/javascript')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Service-Worker-Allowed'] = '/'
+    return resp
+
+@app.route('/offline')
+def offline_page():
+    return render("offline_page", title="غير متصل")
 
 @app.route("/api/favorite/toggle/<int:prod_id>", methods=["POST"])
 @login_required
@@ -10523,7 +11097,18 @@ def _get_user_by_token(token):
                WHERE s.token = ? AND s.used = 0""",
             (token,), fetchone=True
         )
-        return row_to_dict(row) if row else None
+        user = row_to_dict(row) if row else None
+        if not user:
+            return None
+        try:
+            expires_at = user.get("expires_at")
+            if expires_at:
+                exp_dt = datetime.fromisoformat(str(expires_at))
+                if exp_dt < datetime.now():
+                    return None
+        except Exception:
+            pass
+        return user
     except Exception:
         return None
 
