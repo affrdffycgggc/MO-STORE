@@ -14,6 +14,20 @@ from flask import request, session, jsonify, redirect, url_for, render_template_
 # إعدادات Expo Push
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
+def _row_to_dict(row):
+    """تحويل صف قاعدة البيانات (sqlite3.Row) إلى قاموس عادي يدعم .get()"""
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row
+    try:
+        return {key: row[key] for key in row.keys()}
+    except Exception:
+        try:
+            return dict(row)
+        except Exception:
+            return None
+
 def register_auth_routes(app, db, _hash_password, _verify_password):
     
     # ==================================================================
@@ -161,7 +175,18 @@ def register_auth_routes(app, db, _hash_password, _verify_password):
                    WHERE s.token = ? AND s.used = 0""",
                 (token,), fetchone=True
             )
-            return row
+            user = _row_to_dict(row)
+            if not user:
+                return None
+            try:
+                expires_at = user.get("expires_at")
+                if expires_at:
+                    exp_dt = datetime.fromisoformat(str(expires_at))
+                    if exp_dt < datetime.now():
+                        return None
+            except Exception:
+                pass
+            return user
         except Exception:
             return None
 
@@ -197,7 +222,7 @@ def register_auth_routes(app, db, _hash_password, _verify_password):
         if "user_id" in session:
             user = db.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],), fetchone=True)
             if user:
-                return user, None
+                return _row_to_dict(user), None
 
         return None, None
 
@@ -266,6 +291,10 @@ def register_auth_routes(app, db, _hash_password, _verify_password):
             return jsonify({"success": False, "message": "اسم المستخدم وكلمة المرور مطلوبة"}), 400
 
         user = db.execute("SELECT * FROM users WHERE username = ?", (username,), fetchone=True)
+        if not user:
+            return jsonify({"success": False, "message": "بيانات الدخول غير صحيحة"}), 401
+
+        user = _row_to_dict(user)
         if not user:
             return jsonify({"success": False, "message": "بيانات الدخول غير صحيحة"}), 401
 
